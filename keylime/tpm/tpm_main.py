@@ -17,12 +17,20 @@ import typing
 import zlib
 import codecs
 from distutils.version import StrictVersion
+from typing import Optional
 
 from cryptography import exceptions as crypto_exceptions
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization as crypto_serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography import x509
+
+import yaml
+try:
+    from yaml import CSafeLoader as SafeLoader
+except ImportError:
+    from yaml import SafeLoader
+from yaml.reader import ReaderError
 
 from keylime import cmd_exec
 from keylime import config
@@ -36,6 +44,29 @@ from keylime.tpm import tpm2_objects
 from keylime.failure import Failure, Component
 
 logger = keylime_logging.init_logging('tpm')
+
+
+def _convert(data):
+    if isinstance(data, bytes):
+        return data.decode()
+    if isinstance(data, dict):
+        return dict(map(_convert, data.items()))
+    if isinstance(data, tuple):
+        return tuple(map(_convert, data))
+    if isinstance(data, list):
+        return list(map(_convert, data))
+    return data
+
+
+def _yaml_to_dict(arry, add_newlines=True, logger=None) -> Optional[dict]:
+    arry = _convert(arry)
+    sep = "\n" if add_newlines else ""
+    try:
+        return yaml.load(sep.join(arry), Loader=SafeLoader)
+    except ReaderError as err:
+        if logger is not None:
+            logger.warning("Could not load yaml as dict: %s", str(err))
+    return None
 
 
 def _get_cmd_env():
@@ -257,8 +288,8 @@ class tpm(tpm_abstract.AbstractTPM):
         retDict = self.__run(["tpm2_startup", "--version"])
 
         code = retDict['code']
-        output = ''.join(config.convert(retDict['retout']))
-        errout = ''.join(config.convert(retDict['reterr']))
+        output = ''.join(_convert(retDict['retout']))
+        errout = ''.join(_convert(retDict['reterr']))
         if code != tpm_abstract.AbstractTPM.EXIT_SUCESS:
             raise Exception("Error establishing tpm2-tools version using TPM2_Startup: %s" + str(code) + ": " + str(errout))
 
@@ -286,8 +317,8 @@ class tpm(tpm_abstract.AbstractTPM):
         elif self.tools_version in ["4.0", "4.2"]:
             retDict = self.__run(["tpm2_getcap", "algorithms"])
 
-        output = config.convert(retDict['retout'])
-        errout = config.convert(retDict['reterr'])
+        output = _convert(retDict['retout'])
+        errout = _convert(retDict['reterr'])
         code = retDict['code']
 
         if code != tpm_abstract.AbstractTPM.EXIT_SUCESS:
@@ -301,7 +332,7 @@ class tpm(tpm_abstract.AbstractTPM):
             output = output.replace("clear", "0")
             output = [output]
 
-        retyaml = config.yaml_to_dict(output, logger=logger)
+        retyaml = _yaml_to_dict(output, logger=logger)
         if retyaml is None:
             logger.warning("Could not read YAML output of tpm2_getcap.")
             return
@@ -320,14 +351,14 @@ class tpm(tpm_abstract.AbstractTPM):
         elif self.tools_version in ["4.0", "4.2"]:
             retDict = self.__run(["tpm2_getcap", "pcrs"])
 
-        output = config.convert(retDict['retout'])
-        errout = config.convert(retDict['reterr'])
+        output = _convert(retDict['retout'])
+        errout = _convert(retDict['reterr'])
         code = retDict['code']
 
         if code != tpm_abstract.AbstractTPM.EXIT_SUCESS:
             raise Exception("get_tpm_algorithms failed with code " + str(code) + ": " + str(errout))
 
-        retyaml = config.yaml_to_dict(output, logger=logger)
+        retyaml = _yaml_to_dict(output, logger=logger)
         pcrs = {}
         if retyaml is None:
             logger.warning("Could not read YAML output of tpm2_getcap.")
@@ -418,7 +449,7 @@ class tpm(tpm_abstract.AbstractTPM):
     # tpm_initialize
     def __startup_tpm(self):
         retDict = self.__run(['tpm2_startup', '-c'])
-        errout = config.convert(retDict['reterr'])
+        errout = _convert(retDict['reterr'])
         code = retDict['code']
         if code != tpm_abstract.AbstractTPM.EXIT_SUCESS:
             raise Exception("Error initializing emulated TPM with TPM2_Startup: %s" + str(code) + ": " + str(errout))
@@ -447,7 +478,7 @@ class tpm(tpm_abstract.AbstractTPM):
             if code != tpm_abstract.AbstractTPM.EXIT_SUCESS:
                 raise Exception("tpm2_getcap failed with code " + str(code) + ": " + str(reterr))
 
-            outjson = config.yaml_to_dict(output, logger=logger)
+            outjson = _yaml_to_dict(output, logger=logger)
             if outjson is not None and hex(current_handle) in outjson:
                 if self.tools_version == "3.2":
                     cmd = ["tpm2_evictcontrol", "-A", "o", "-H",
@@ -497,7 +528,7 @@ class tpm(tpm_abstract.AbstractTPM):
                 handle = int(0x81010007)
             elif self.tools_version in ["4.0", "4.2"]:
                 handle = None
-                retyaml = config.yaml_to_dict(output, logger=logger)
+                retyaml = _yaml_to_dict(output, logger=logger)
                 if retyaml is None:
                     raise Exception("Could not read YAML output of tpm2_createek.")
                 if "persistent-handle" in retyaml:
@@ -620,8 +651,8 @@ class tpm(tpm_abstract.AbstractTPM):
                 logger.info("Flushing old ak handle: %s" % aik_handle)
                 retDict = self.__run(["tpm2_getcap", "handles-persistent"],
                                      raiseOnError=False)
-            output = config.convert(retDict['retout'])
-            errout = config.convert(retDict['reterr'])
+            output = _convert(retDict['retout'])
+            errout = _convert(retDict['reterr'])
             code = retDict['code']
 
             if code != tpm_abstract.AbstractTPM.EXIT_SUCESS:
@@ -633,7 +664,7 @@ class tpm(tpm_abstract.AbstractTPM):
                 output = output.replace("0x", " - 0x")
                 output = [output]
 
-            outjson = config.yaml_to_dict(output, logger=logger)
+            outjson = _yaml_to_dict(output, logger=logger)
             if self.tools_version == "3.2":
                 evict_it = outjson is not None and aik_handle in outjson
             elif self.tools_version in ["4.0", "4.2"]:
@@ -696,7 +727,7 @@ class tpm(tpm_abstract.AbstractTPM):
             if code != tpm_abstract.AbstractTPM.EXIT_SUCESS:
                 raise Exception("tpm2_createak failed with code " + str(code) + ": " + str(reterr))
 
-            jsonout = config.yaml_to_dict(retout, logger=logger)
+            jsonout = _yaml_to_dict(retout, logger=logger)
             if jsonout is None:
                 raise Exception("unable to parse YAML output of tpm2_createak. Is your tpm2-tools installation up to date?")
             aik_tpm = retDict['fileouts'][akpubfile.name]
@@ -731,8 +762,8 @@ class tpm(tpm_abstract.AbstractTPM):
         elif self.tools_version in ["4.0", "4.2"]:
             retDict = self.__run(["tpm2_getcap", "handles-persistent"])
         # retout = retDict['retout']
-        retout = config.convert(retDict['retout'])
-        errout = config.convert(retDict['reterr'])
+        retout = _convert(retDict['retout'])
+        errout = _convert(retDict['reterr'])
         code = retDict['code']
 
         if code != tpm_abstract.AbstractTPM.EXIT_SUCESS:
@@ -745,7 +776,7 @@ class tpm(tpm_abstract.AbstractTPM):
             retout = [retout]
 
         owner_pw = self.get_tpm_metadata("owner_pw")
-        jsonout = config.yaml_to_dict(retout, logger=logger)
+        jsonout = _yaml_to_dict(retout, logger=logger)
         if jsonout is None:
             logger.warning("Could not read YAML output of tpm2_getcap.")
             jsonout = {}
@@ -954,7 +985,7 @@ class tpm(tpm_abstract.AbstractTPM):
             s1 = re.sub(r'(?!".*\\".*")".*".*"', quoterepl, s.decode('utf-8'))
             output[i] = re.sub(r"[\x01-\x1F\x7F]", "", s1).encode('utf-8')
 
-        retyaml = config.yaml_to_dict(output, logger=logger)
+        retyaml = _yaml_to_dict(output, logger=logger)
         if retyaml is None:
             raise Exception("Could not read YAML output of tpm2_getcap.")
         if "TPM2_PT_VENDOR_STRING_1" in retyaml:
@@ -1164,7 +1195,7 @@ class tpm(tpm_abstract.AbstractTPM):
             return failure
 
         pcrs = []
-        jsonout = config.yaml_to_dict(retout, logger=logger)
+        jsonout = _yaml_to_dict(retout, logger=logger)
         if jsonout is None:
             failure.add_event("quote_validation", {"message": "YAML parsing failed for quote validation using tpm2-tools.",
                                                     "data": retout}, False)
@@ -1205,11 +1236,11 @@ class tpm(tpm_abstract.AbstractTPM):
         if hash_alg is None:
             hash_alg = self.defaults['hash']
         if self.tools_version == "3.2":
-            output = config.convert(self.__run("tpm2_pcrlist")['retout'])
+            output = _convert(self.__run("tpm2_pcrlist")['retout'])
         elif self.tools_version in ["4.0", "4.2"]:
-            output = config.convert(self.__run("tpm2_pcrread")['retout'])
+            output = _convert(self.__run("tpm2_pcrread")['retout'])
 
-        jsonout = config.yaml_to_dict(output, logger=logger)
+        jsonout = _yaml_to_dict(output, logger=logger)
         if jsonout is None:
             raise Exception("Could not read YAML output of tpm2_pcrread.")
 
@@ -1273,7 +1304,7 @@ class tpm(tpm_abstract.AbstractTPM):
                 if self.tools_version in ["4.0", "4.2"]:
                     raise Exception("tpm2_nvreadpublic for ekcert failed with code " + str(code) + ": " + str(reterr))
 
-            outjson = config.yaml_to_dict(output, logger=logger)
+            outjson = _yaml_to_dict(output, logger=logger)
 
             if outjson is None or 0x1c00002 not in outjson or "size" not in outjson[0x1c00002]:
                 logger.warning("No EK certificate found in TPM NVRAM")
@@ -1289,8 +1320,8 @@ class tpm(tpm_abstract.AbstractTPM):
             elif self.tools_version in ["4.0", "4.2"]:
                 retDict = self.__run(["tpm2_nvread", '0x1c00002', "-s", ekcert_size, "-o", nvpath.name],
                                      raiseOnError=False, outputpaths=nvpath.name)
-            output = config.convert(retDict['retout'])
-            errout = config.convert(retDict['reterr'])
+            output = _convert(retDict['retout'])
+            errout = _convert(retDict['reterr'])
             code = retDict['code']
             ekcert = retDict['fileouts'][nvpath.name]
 
@@ -1307,7 +1338,7 @@ class tpm(tpm_abstract.AbstractTPM):
             retDict = self.__run(["tpm2_nvread", "0x1500018", "-C", "0x40000001", "-s", str(config.BOOTSTRAP_KEY_SIZE), "-P", owner_pw], raiseOnError=False)
 
         output = retDict['retout']
-        errout = config.convert(retDict['reterr'])
+        errout = _convert(retDict['reterr'])
         code = retDict['code']
 
         if code != tpm_abstract.AbstractTPM.EXIT_SUCESS:
@@ -1390,7 +1421,7 @@ class tpm(tpm_abstract.AbstractTPM):
             log_bin_filename = log_bin_file.name
             retDict_tpm2 = self.__run(['tpm2_eventlog', '--eventlog-version=2', log_bin_filename])
         log_parsed_strs = retDict_tpm2['retout']
-        log_parsed_data = config.yaml_to_dict(log_parsed_strs, add_newlines=False, logger=logger)
+        log_parsed_data = _yaml_to_dict(log_parsed_strs, add_newlines=False, logger=logger)
         if log_parsed_data is None:
             return None
         #pylint: disable=import-outside-toplevel

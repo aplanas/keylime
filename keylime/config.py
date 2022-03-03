@@ -5,28 +5,8 @@ Copyright 2017 Massachusetts Institute of Technology.
 import os
 import os.path
 import configparser
-from typing import Optional
-
-import yaml
-try:
-    from yaml import CSafeLoader as SafeLoader
-except ImportError:
-    from yaml import SafeLoader
-from yaml.reader import ReaderError
 
 from keylime import json
-
-
-def convert(data):
-    if isinstance(data, bytes):
-        return data.decode()
-    if isinstance(data, dict):
-        return dict(map(convert, data.items()))
-    if isinstance(data, tuple):
-        return tuple(map(convert, data))
-    if isinstance(data, list):
-        return list(map(convert, data))
-    return data
 
 
 def environ_bool(env_name, default):
@@ -149,18 +129,6 @@ else:
 WORK_DIR = os.getenv('KEYLIME_DIR', DEFAULT_WORK_DIR)
 
 CA_WORK_DIR = '%s/ca/' % WORK_DIR
-
-
-def yaml_to_dict(arry, add_newlines=True, logger=None) -> Optional[dict]:
-    arry = convert(arry)
-    sep = "\n" if add_newlines else ""
-    try:
-        return yaml.load(sep.join(arry), Loader=SafeLoader)
-    except ReaderError as err:
-        if logger is not None:
-            logger.warning("Could not load yaml as dict: %s", str(err))
-    return None
-
 
 if STUB_IMA:
     IMA_ML = '../scripts/ima/ascii_runtime_measurements'
